@@ -1,8 +1,8 @@
 {
-  "name": "FinOrganizer",
+  "name": "financial-document-organizer-backend",
   "version": "0.0.1",
   "description": "",
-  "author": "",
+  "author": "Niyaz Malik",
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
