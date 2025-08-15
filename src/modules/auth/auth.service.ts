@@ -60,7 +60,7 @@ export class AuthService {
     }
   }
 
-  async getAuthenticatedUser(userId: string) {
+  async getAuthenticatedUser(userId: string): Promise<OAuth2Client> {
     const user = await this.userRepo.findOne({ where: { id: userId } });
     if (!user) throw new Error('User not found');
 
@@ -68,6 +68,7 @@ export class AuthService {
     const refreshToken = user.decryptRefreshToken();
     if (!accessToken || !refreshToken) throw new Error('Tokens missing');
 
+    // Refresh if expired
     if (!user.expiryDate || user.expiryDate <= Date.now()) {
       this.oauth2Client.setCredentials({ refresh_token: refreshToken });
       const { credentials } = await this.oauth2Client.refreshAccessToken();
@@ -77,6 +78,13 @@ export class AuthService {
       await this.userRepo.save(user);
     }
 
-    return { user, accessToken: user.decryptAccessToken() };
+    // Return fully configured OAuth2Client
+    this.oauth2Client.setCredentials({
+      access_token: user.decryptAccessToken(),
+      refresh_token: user.decryptRefreshToken(),
+      expiry_date: user.expiryDate ?? undefined,
+    });
+
+    return this.oauth2Client;
   }
 }
