@@ -27,8 +27,8 @@ export class AuthService {
       'email',
       'https://www.googleapis.com/auth/gmail.modify',
       'https://www.googleapis.com/auth/gmail.labels',
-      'https://www.googleapis.com/auth/drive',     // access user's Drive files
-      'https://www.googleapis.com/auth/spreadsheets',   // access Google Sheets
+      'https://www.googleapis.com/auth/drive',
+      'https://www.googleapis.com/auth/spreadsheets',
     ];
     return this.oauth2Client.generateAuthUrl({
       access_type: 'offline',
