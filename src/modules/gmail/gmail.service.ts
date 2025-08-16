@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { google, gmail_v1 } from 'googleapis';
+import { google } from 'googleapis';
 import { AuthService } from '../auth/auth.service';
 
 @Injectable()
@@ -10,21 +10,19 @@ export class GmailService {
     private allowedSenders: string[] = [];
 
     async scanInbox(userId: string) {
-        // Get fully authenticated OAuth2Client
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Construct Gmail search query
+        // Constructing Gmail search query
         let q = this.keywords.join(' OR ');
         if (this.allowedSenders.length > 0) {
             const senderQuery = this.allowedSenders.map(s => `from:${s}`).join(' OR ');
             q += ` AND (${senderQuery})`;
         }
 
-        let messages: gmail_v1.Schema$Message[] = [];
+        // Step 1: Fetch message IDs only
+        let messageIds: string[] = [];
         let nextPageToken: string | undefined;
-
-        // Pagination
         do {
             const res = await gmail.users.messages.list({
                 userId: 'me',
@@ -33,7 +31,8 @@ export class GmailService {
                 pageToken: nextPageToken,
             });
 
-            messages = messages.concat(res.data.messages || []);
+            const ids = res.data.messages?.map(m => m.id!).filter(Boolean) || [];
+            messageIds = messageIds.concat(ids);
             nextPageToken = res.data.nextPageToken || undefined;
         } while (nextPageToken);
 
@@ -43,44 +42,53 @@ export class GmailService {
             subject: string;
             date: string;
             invoiceNumber: string | null;
-            attachments: { filename: string; data: Buffer }[];
+            attachments: { filename: string; data: string }[]; // For now buffer -> string
         }[] = [];
 
-        // Fetch each message
-        for (const msg of messages) {
-            const m = await gmail.users.messages.get({ userId: 'me', id: msg.id!, format: 'full' });
+        // Fetching each message and only keeping if financial attachments exist
+        for (const id of messageIds) {
+            const m = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
 
             const headers = m.data.payload?.headers || [];
             const subject = headers.find(h => h.name === 'Subject')?.value || '';
             const sender = headers.find(h => h.name === 'From')?.value || '';
             const date = headers.find(h => h.name === 'Date')?.value || '';
 
-            // Extract invoice number from subject (4+ digits)
             const invoiceNumberMatch = subject.match(/\b\d{4,}\b/);
             const invoiceNumber = invoiceNumberMatch ? invoiceNumberMatch[0] : null;
 
-            const attachments: { filename: string; data: Buffer }[] = [];
+            // For now instead of buffer -> string ( like "Hello..." )...
+            const attachments: { filename: string; data: string }[] = [];
 
             const parts = m.data.payload?.parts || [];
             for (const part of parts) {
                 if (part.filename && part.body?.attachmentId) {
-                    const isFinancial = /(invoice|receipt|bill)/i.test(part.filename);
+                    const isFinancial = /(invoice|reciept|receipt|bill)/i.test(part.filename);
+                    /**  
+                     * I have received a mail for my passport regarding appointment booking and it has an
+                     * attachment [AppointmnetReciept.pdf]...Clearly receipt is a typo and that's
+                     * why it was getting ignored, so I included it too ... 
+                     **/
+
                     if (!isFinancial) continue;
 
                     const attach = await gmail.users.messages.attachments.get({
                         userId: 'me',
-                        messageId: msg.id!,
+                        messageId: id,
                         id: part.body.attachmentId,
                     });
 
                     if (attach.data.data) {
-                        const data = Buffer.from(attach.data.data, 'base64');
-                        attachments.push({ filename: part.filename, data });
+                        // const data = Buffer.from(attach.data.data, 'base64');
+                        attachments.push({ filename: part.filename, data: "Hello..."});
                     }
                 }
             }
 
-            results.push({ id: msg.id!, sender, subject, date, invoiceNumber, attachments });
+            // Only pushing emails with financial attachments
+            if (attachments.length > 0) {
+                results.push({ id, sender, subject, date, invoiceNumber, attachments });
+            }
         }
 
         return results;

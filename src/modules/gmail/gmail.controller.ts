@@ -1,7 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { GmailService } from './gmail.service';
 
-@Controller('gmail')
+@Controller()
 export class GmailController {
     constructor(private readonly gmailService: GmailService) { }
 
@@ -12,6 +12,8 @@ export class GmailController {
         }
 
         const results = await this.gmailService.scanInbox(userId);
-        return { status: 200, results };
+
+        // For now returning the results only...
+        return results;
     }
 }

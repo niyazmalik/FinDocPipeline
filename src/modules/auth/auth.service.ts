@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { google } from 'googleapis';
 import { OAuth2Client } from 'google-auth-library';
-import { User } from '../entities/user.entity';
+import { User } from '../../entities/user.entity';
 
 @Injectable()
 export class AuthService {
@@ -21,13 +21,17 @@ export class AuthService {
   }
 
   getAuthUrl(): string {
+    const SCOPES = [
+      'openid',
+      'profile',
+      'email',
+      'https://www.googleapis.com/auth/gmail.readonly', // read Gmail messages
+      'https://www.googleapis.com/auth/drive.file',     // access user's Drive files
+      'https://www.googleapis.com/auth/spreadsheets',   // access Google Sheets
+    ];
     return this.oauth2Client.generateAuthUrl({
       access_type: 'offline',
-      scope: ['openid', 'profile', 'email',
-        'https://www.googleapis.com/auth/gmail.readonly',
-        'https://www.googleapis.com/auth/drive.file',
-        'https://www.googleapis.com/auth/spreadsheets'
-      ],
+      scope: SCOPES,
       prompt: 'consent',
     });
   }
@@ -66,25 +70,41 @@ export class AuthService {
 
     const accessToken = user.decryptAccessToken();
     const refreshToken = user.decryptRefreshToken();
-    if (!accessToken || !refreshToken) throw new Error('Tokens missing');
+    if (!accessToken || !refreshToken) throw new Error('Tokens missing for user');
 
-    // Refresh if expired
-    if (!user.expiryDate || user.expiryDate <= Date.now()) {
-      this.oauth2Client.setCredentials({ refresh_token: refreshToken });
-      const { credentials } = await this.oauth2Client.refreshAccessToken();
+    try {
+      // Refreshing if expired
+      if (!user.expiryDate || user.expiryDate <= Date.now()) {
+        this.oauth2Client.setCredentials({ refresh_token: refreshToken });
+        const { credentials } = await this.oauth2Client.refreshAccessToken();
 
-      user.accessToken = credentials.access_token || '';
-      user.expiryDate = credentials.expiry_date ?? null;
-      await this.userRepo.save(user);
+        if (!credentials.access_token) {
+          throw new Error('Failed to refresh access token');
+        }
+
+        user.accessToken = credentials.access_token;
+        user.expiryDate = credentials.expiry_date ?? null;
+        await this.userRepo.save(user);
+      }
+
+      // Returning fully configured OAuth2Client
+      this.oauth2Client.setCredentials({
+        access_token: user.decryptAccessToken(),
+        refresh_token: user.decryptRefreshToken(),
+        expiry_date: user.expiryDate ?? undefined,
+      });
+
+      return this.oauth2Client;
+
+    } catch (err) {
+      if (err?.response?.data?.error === 'invalid_grant') {
+        this.logger.warn(`User ${userId} refresh token invalid/revoked.`);
+        throw new Error(
+          'Refresh token expired or revoked. User must re-authenticate.'
+        );
+      }
+      this.logger.error(`Unexpected error for user ${userId}:`, err);
+      throw err; // re-throwing other unexpected errors
     }
-
-    // Return fully configured OAuth2Client
-    this.oauth2Client.setCredentials({
-      access_token: user.decryptAccessToken(),
-      refresh_token: user.decryptRefreshToken(),
-      expiry_date: user.expiryDate ?? undefined,
-    });
-
-    return this.oauth2Client;
   }
 }
