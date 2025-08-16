@@ -3,6 +3,8 @@ import { ConfigModule, ConfigService } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AuthModule } from './modules/auth/auth.module';
 import { GmailModule } from './modules/gmail/gmail.module';
+import { DriveModule } from './modules/drive/drive.module';
+import { ScanModule } from './modules/scan/scan.module';
 
 @Module({
   imports: [
@@ -29,6 +31,8 @@ import { GmailModule } from './modules/gmail/gmail.module';
     }),
     AuthModule,
     GmailModule,
+    DriveModule,
+    ScanModule
   ],
 })
 export class AppModule {}

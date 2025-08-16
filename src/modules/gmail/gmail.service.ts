@@ -1,26 +1,32 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { google } from 'googleapis';
 import { AuthService } from '../auth/auth.service';
 
 @Injectable()
 export class GmailService {
-    constructor(private readonly authService: AuthService) { }
+    private readonly logger = new Logger(GmailService.name);
+    constructor(
+        private readonly authService: AuthService,
+    ) { }
 
     private keywords = ['invoice', 'receipt', 'bill'];
     private allowedSenders: string[] = [];
 
-    async scanInbox(userId: string) {
+    async processFinancialEmails(userId: string) {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Constructing Gmail search query
+        // Constructing Gmail query
         let q = this.keywords.join(' OR ');
         if (this.allowedSenders.length > 0) {
-            const senderQuery = this.allowedSenders.map(s => `from:${s}`).join(' OR ');
+            const senderQuery = this.allowedSenders.map((s) => `from:${s}`).join(' OR ');
             q += ` AND (${senderQuery})`;
         }
 
-        // Step 1: Fetch message IDs only
+        // Only fetching emails with attachments
+        q += ' has:attachment -label:Processed_Financial';
+
+        // Fetching message IDs only
         let messageIds: string[] = [];
         let nextPageToken: string | undefined;
         do {
@@ -42,7 +48,7 @@ export class GmailService {
             subject: string;
             date: string;
             invoiceNumber: string | null;
-            attachments: { filename: string; data: string }[]; // For now buffer -> string
+            attachments: { filename: string; data: Buffer }[];
         }[] = [];
 
         // Fetching each message and only keeping if financial attachments exist
@@ -57,8 +63,7 @@ export class GmailService {
             const invoiceNumberMatch = subject.match(/\b\d{4,}\b/);
             const invoiceNumber = invoiceNumberMatch ? invoiceNumberMatch[0] : null;
 
-            // For now instead of buffer -> string ( like "Hello..." )...
-            const attachments: { filename: string; data: string }[] = [];
+            const attachments: { filename: string; data: Buffer }[] = [];
 
             const parts = m.data.payload?.parts || [];
             for (const part of parts) {
@@ -79,8 +84,8 @@ export class GmailService {
                     });
 
                     if (attach.data.data) {
-                        // const data = Buffer.from(attach.data.data, 'base64');
-                        attachments.push({ filename: part.filename, data: "Hello..."});
+                        const data = Buffer.from(attach.data.data, 'base64');
+                        attachments.push({ filename: part.filename, data });
                     }
                 }
             }
@@ -92,5 +97,41 @@ export class GmailService {
         }
 
         return results;
+    }
+
+    async applyLabel(userId: string, messageIds: string[]) {
+        if (!messageIds.length) return;
+
+        const oauth2Client = await this.authService.getAuthenticatedUser(userId);
+        const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
+
+        const labelName = 'Processed_Financial';
+
+        // Ensure label exists
+        const labelsRes = await gmail.users.labels.list({ userId: 'me' });
+        let label = labelsRes.data.labels?.find((l) => l.name === labelName);
+
+        if (!label) {
+            const newLabel = await gmail.users.labels.create({
+                userId: 'me',
+                requestBody: {
+                    name: labelName,
+                    labelListVisibility: 'labelShow',
+                    messageListVisibility: 'show',
+                },
+            });
+            label = newLabel.data;
+        }
+
+        // Applying label to each message
+        await gmail.users.messages.batchModify({
+            userId: 'me',
+            requestBody: {
+                ids: messageIds,
+                addLabelIds: [label.id!],
+            },
+        });
+
+        this.logger.log(`Applied label "${labelName}" to ${messageIds.length} emails.`);
     }
 }
