@@ -48,7 +48,7 @@ export class ScanService {
         // Logging uploaded files to sheets
         const sheetLogs = filesToUpload.map((file, idx) => ({
             sender: file.sender,
-            subject: emails[idx].subject, // keep subject from original email
+            subject: emails[idx].subject,
             date: file.date,
             invoiceNumber: file.invoiceNumber,
             driveFileId: uploadedFileIds[idx],
