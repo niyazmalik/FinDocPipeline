@@ -1,8 +1,8 @@
-# FinOrganizer
+# Financial Document Organizer
 
 ## Overview
 
-**FinOrganizer** is a NestJS-based automation tool designed to streamline financial record-keeping. It scans your Gmail for invoices and receipts, archives them in Google Drive with a structured naming system, and logs all relevant details in Google Sheets for easy tracking and reporting.
+**Financial Document Organizer** is a NestJS-based automation tool designed to streamline financial record-keeping. It scans your Gmail for invoices and receipts, archives them in Google Drive with a structured naming system, and logs all relevant details in Google Sheets for easy tracking and reporting.
 
 ## Features
 
@@ -39,17 +39,13 @@ npm install googleapis dotenv
 Create a `.env` file in the root directory with the following:
 
 ```
+PORT=port_number
 GOOGLE_CLIENT_ID=your_client_id
 GOOGLE_CLIENT_SECRET=your_client_secret
 GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/callback
 TOKEN_ENCRYPTION_KEY=some_secure_key
-AFDO_DRIVE_ROOT_FOLDER_ID=your_drive_folder_id
-AFDO_SHEETS_SPREADSHEET_ID=your_sheet_id
-AFDO_SHEETS_TAB_NAME=Logs
-AFDO_GMAIL_QUERY=has:attachment (invoice OR receipt OR bill) -label:AFDO-Processed newer_than:30d
-AFDO_PROCESSED_LABEL=AFDO-Processed
-AFDO_ERROR_LABEL=AFDO-Error
-LOG_LEVEL=debug
+DRIVE_FOLDER_ID=your_drive_folder_id
+SHEET_SPREADSHEET_ID=your_sheet_id
 ```
 
 ### Running the Application
@@ -74,9 +70,10 @@ npm run start:dev
 
 ```
 src/
-  app.controller.ts
   app.module.ts
   main.ts
+  utils
+  entities
   modules/
     auth/
     gmail/
