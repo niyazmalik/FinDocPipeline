@@ -25,8 +25,9 @@ export class AuthService {
       'openid',
       'profile',
       'email',
-      'https://www.googleapis.com/auth/gmail.readonly', // read Gmail messages
-      'https://www.googleapis.com/auth/drive.file',     // access user's Drive files
+      'https://www.googleapis.com/auth/gmail.modify',
+      'https://www.googleapis.com/auth/gmail.labels',
+      'https://www.googleapis.com/auth/drive',     // access user's Drive files
       'https://www.googleapis.com/auth/spreadsheets',   // access Google Sheets
     ];
     return this.oauth2Client.generateAuthUrl({
@@ -106,5 +107,20 @@ export class AuthService {
       this.logger.error(`Unexpected error for user ${userId}:`, err);
       throw err; // re-throwing other unexpected errors
     }
+  }
+
+  async getUserByToken(token: string): Promise<User> {
+    const user = await this.userRepo.findOne({
+      where: [
+        { accessToken: token },
+        { refreshToken: token },
+      ],
+    });
+
+    if (!user) {
+      throw new Error('User not found for provided token');
+    }
+
+    return user;
   }
 }
