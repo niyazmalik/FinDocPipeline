@@ -21,7 +21,7 @@ export class DriveService {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const drive = google.drive({ version: 'v3', auth: oauth2Client });
 
-        // Check if folder exists
+        // Checking if folder exists
         try {
             const folder = await drive.files.get({
                 fileId: this.folderId,

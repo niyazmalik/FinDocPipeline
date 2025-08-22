@@ -7,27 +7,15 @@ import { GeminiService } from '../gemini/gemini.service';
 @Injectable()
 export class GmailService {
     private readonly logger = new Logger(GmailService.name);
-    // private keywords = ['invoice', 'receipt', 'bill'];
-    // private allowedSenders: string[] = [];
-
+  
     constructor(
         private readonly authService: AuthService,
         private readonly geminiService: GeminiService,
     ) { }
 
-    async processFinancialEmails(userId: string): Promise<ScannedEmail[]> {
+    async processEmails(userId: string): Promise<ScannedEmail[]> {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-        // // Constructing Gmail query
-        // let q = this.keywords.join(' OR ');
-        // if (this.allowedSenders.length > 0) {
-        //     const senderQuery = this.allowedSenders.map((s) => `from:${s}`).join(' OR ');
-        //     q += ` AND (${senderQuery})`;
-        // }
-
-        // // Only fetching emails with attachments
-        // q += ' has:attachment ';
 
         // Fetching message IDs only
         let messageIds: string[] = [];
@@ -35,7 +23,6 @@ export class GmailService {
         do {
             const res = await gmail.users.messages.list({
                 userId: 'me',
-                // q,
                 maxResults: 5,
                 pageToken: nextPageToken,
             });
@@ -57,7 +44,7 @@ export class GmailService {
 
         const emailsMeta: EmailMeta[] = [];
 
-        // Collect all emails first (without Gemini call)
+        // Collecting email metadata before Gemini batch classification...
         for (const id of messageIds) {
             const m = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
 
@@ -81,7 +68,7 @@ export class GmailService {
             });
         }
 
-        // Classify all emails in one Gemini call
+        // Classifying all collected emails in one Gemini call...
         const classifications = await this.geminiService.classifyEmailsBatch(
             emailsMeta.map(e => ({
                 id: e.id,
@@ -124,7 +111,7 @@ export class GmailService {
                 invoiceNumber: email.invoiceNumber,
                 date: email.date,
                 attachments,
-                classification,   // category + confidence
+                classification,
                 snippet: email.snippet,
             });
 
@@ -150,7 +137,6 @@ export class GmailService {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Ensure label exists
         const labelsRes = await gmail.users.labels.list({ userId: 'me' });
         let label = labelsRes.data.labels?.find((l) => l.name === labelName);
 
@@ -166,7 +152,6 @@ export class GmailService {
             label = newLabel.data;
         }
 
-        // Apply label to messages
         await gmail.users.messages.batchModify({
             userId: 'me',
             requestBody: {

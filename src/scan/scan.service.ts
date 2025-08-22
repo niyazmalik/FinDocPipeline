@@ -1,15 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { Repository, DataSource } from 'typeorm';
+import { InjectRepository } from '@nestjs/typeorm';
 import { DriveService } from 'src/modules/drive/drive.service';
 import { GmailService } from 'src/modules/gmail/gmail.service';
 import { SheetService } from 'src/modules/sheet/sheet.service';
 import { ScannedEmail } from 'src/utils/types/scanned-email.type';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Email } from 'src/entities/email.entity';
-import { User } from 'src/entities/user.entity';
-import { Repository, DataSource } from 'typeorm';
 import { GoogleDriveFile } from 'src/entities/google-drive-file.entity';
 import { GoogleSheetsRecord } from 'src/entities/google-sheets-record.entity';
 import { ProcessedEmail } from 'src/entities/processed-email.entity';
+import { Email } from 'src/entities/email.entity';
+import { User } from 'src/entities/user.entity';
 
 @Injectable()
 export class ScanService {
@@ -27,8 +27,9 @@ export class ScanService {
     ) { }
 
     async processInbox(userId: string) {
+        // getting the emails
         const emails: ScannedEmail[] =
-            await this.gmailService.processFinancialEmails(userId);
+            await this.gmailService.processEmails(userId);
 
         if (!emails.length) {
             this.logger.log('No financial emails to process.');
@@ -37,12 +38,13 @@ export class ScanService {
 
         const user = await this.userRepo.findOneByOrFail({ id: userId });
 
-        // Use a transaction to keep consistency
+        /* Using a transaction to maintain consistency.
+            If any error occurs during this process, all changes will be rolled back. */
         return this.dataSource.transaction(async (manager) => {
             const savedEmails: Email[] = [];
 
             for (const email of emails) {
-                //  Save Email
+                // Storing results of email classification and processing in the database
                 const savedEmail = await manager.getRepository(Email).save(
                     manager.getRepository(Email).create({
                         gmail_message_id: email.id,
@@ -52,13 +54,13 @@ export class ScanService {
                         date_received: new Date(email.date),
                         user,
                         is_processed: true,
-                        google_label: email.classification.category, // will be updated after Gmail label applied
+                        google_label: email.classification.category,
                     }),
                 );
 
                 savedEmails.push(savedEmail);
 
-                // Prepare and upload attachments
+                // Preparing and uploading the attachments in drive
                 const filesToUpload = email.attachments.map((att) => ({
                     filename: att.filename,
                     data: att.data,
@@ -72,7 +74,7 @@ export class ScanService {
                     filesToUpload,
                 );
 
-                // Save GoogleDriveFile records
+                // Saving the drive uploads data in database
                 const driveFiles = filesToUpload.map((file, idx) =>
                     manager.getRepository(GoogleDriveFile).create({
                         email: savedEmail,
@@ -84,7 +86,7 @@ export class ScanService {
                 );
                 await manager.getRepository(GoogleDriveFile).save(driveFiles);
 
-                // Log into Sheets
+                // Logging into Sheets
                 const sheetLogs = filesToUpload.map((file, idx) => ({
                     sender: file.sender,
                     subject: email.subject,
@@ -96,7 +98,7 @@ export class ScanService {
 
                 const generatedSheetRowIds = await this.sheetService.logFiles(userId, sheetLogs);
 
-                // Save GoogleSheetsRecord
+                // Saving the sheet logs data in database
                 const sheetRecords = driveFiles.map((file, idx) =>
                     manager.getRepository(GoogleSheetsRecord).create({
                         email: savedEmail,
@@ -106,7 +108,8 @@ export class ScanService {
                 );
                 await manager.getRepository(GoogleSheetsRecord).save(sheetRecords);
 
-                // Link into ProcessedEmail table
+                /* Linking back to the original email and recording whether
+                    it is financial along with Gemini confidence score in the database*/
                 const processed = manager.getRepository(ProcessedEmail).create({
                     email: savedEmail,
                     is_financial: true,
@@ -114,13 +117,7 @@ export class ScanService {
                     gemini_confidence_score: email.classification.confidence,
                 });
                 await manager.getRepository(ProcessedEmail).save(processed);
-
-                // // Apply Gmail label & update email record
-                // await this.gmailService.applyLabel(userId, [email.id]);
-                // savedEmail.google_label = 'Financial-Processed'; // whatever label you apply
-                // await manager.getRepository(Email).save(savedEmail);
             }
-
             this.logger.log(`Processed ${savedEmails.length} emails for user ${userId}`);
             return savedEmails.map((e) => e.id);
         });

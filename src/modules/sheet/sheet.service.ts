@@ -6,7 +6,7 @@ import { AuthService } from '../auth/auth.service';
 export class SheetService {
   private readonly logger = new Logger(SheetService.name);
 
-  constructor(private readonly authService: AuthService) {}
+  constructor(private readonly authService: AuthService) { }
 
   private readonly spreadsheetId = process.env.SHEET_SPREADSHEET_ID;
 

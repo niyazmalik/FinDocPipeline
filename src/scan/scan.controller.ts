@@ -10,9 +10,11 @@ export class ScanController {
     async scanInbox(@Query('userId') userId: string) {
         if (!userId) throw new BadRequestException('userId query parameter is required');
 
-        // Process inbox using stored tokens in DB
         const gmailData = await this.scanService.processInbox(userId);
 
-        return gmailData;
+        return {
+            message: "Emails fetched, processed, got uploaded and recorded in database...",
+            gmailData,
+        };
     }
 }
