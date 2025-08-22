@@ -38,8 +38,8 @@ export class Email {
   @Column({ default: false })
   is_processed: boolean;
 
-  @Column({ type: 'varchar', nullable: true })
-  google_label: string | null;
+  @Column()
+  google_label: string;
 
   @CreateDateColumn()
   created_at: Date;

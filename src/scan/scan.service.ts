@@ -21,20 +21,9 @@ export class ScanService {
         private readonly sheetService: SheetService,
         private readonly dataSource: DataSource,
 
-        @InjectRepository(Email)
-        private readonly emailRepo: Repository<Email>,
-
         @InjectRepository(User)
         private readonly userRepo: Repository<User>,
 
-        @InjectRepository(GoogleDriveFile)
-        private readonly driveRepo: Repository<GoogleDriveFile>,
-
-        @InjectRepository(GoogleSheetsRecord)
-        private readonly sheetRepo: Repository<GoogleSheetsRecord>,
-
-        @InjectRepository(ProcessedEmail)
-        private readonly processedRepo: Repository<ProcessedEmail>,
     ) { }
 
     async processInbox(userId: string) {
@@ -59,11 +48,11 @@ export class ScanService {
                         gmail_message_id: email.id,
                         sender: email.sender,
                         subject: email.subject,
-                        body_snippet: "",
+                        body_snippet: email.snippet,
                         date_received: new Date(email.date),
                         user,
                         is_processed: true,
-                        google_label: null, // will be updated after Gmail label applied
+                        google_label: email.classification.category, // will be updated after Gmail label applied
                     }),
                 );
 
@@ -117,19 +106,19 @@ export class ScanService {
                 );
                 await manager.getRepository(GoogleSheetsRecord).save(sheetRecords);
 
-                // 6. Link into ProcessedEmail table
+                // Link into ProcessedEmail table
                 const processed = manager.getRepository(ProcessedEmail).create({
                     email: savedEmail,
                     is_financial: true,
                     processed_date: new Date(),
-                    gemini_confidence_score: 0,
+                    gemini_confidence_score: email.classification.confidence,
                 });
                 await manager.getRepository(ProcessedEmail).save(processed);
 
-                // 7. Apply Gmail label & update email record
-                await this.gmailService.applyLabel(userId, [email.id]);
-                savedEmail.google_label = 'Financial-Processed'; // whatever label you apply
-                await manager.getRepository(Email).save(savedEmail);
+                // // Apply Gmail label & update email record
+                // await this.gmailService.applyLabel(userId, [email.id]);
+                // savedEmail.google_label = 'Financial-Processed'; // whatever label you apply
+                // await manager.getRepository(Email).save(savedEmail);
             }
 
             this.logger.log(`Processed ${savedEmails.length} emails for user ${userId}`);

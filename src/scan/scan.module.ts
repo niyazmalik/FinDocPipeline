@@ -11,6 +11,7 @@ import { ProcessedEmail } from 'src/entities/processed-email.entity';
 import { GoogleDriveFile } from 'src/entities/google-drive-file.entity';
 import { GoogleSheetsRecord } from 'src/entities/google-sheets-record.entity';
 import { TypeOrmModule } from '@nestjs/typeorm';
+import { GeminiModule } from 'src/modules/gemini/gemini.module';
 
 @Module({
   imports: [TypeOrmModule.forFeature([User, Email, ProcessedEmail, GoogleDriveFile, GoogleSheetsRecord]), 

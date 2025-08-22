@@ -2,31 +2,32 @@ import { Injectable, Logger } from '@nestjs/common';
 import { google } from 'googleapis';
 import { AuthService } from '../auth/auth.service';
 import { ScannedEmail } from 'src/utils/types/scanned-email.type';
+import { GeminiService } from '../gemini/gemini.service';
 
 @Injectable()
 export class GmailService {
     private readonly logger = new Logger(GmailService.name);
-    private keywords = ['invoice', 'receipt', 'bill'];
-    private allowedSenders: string[] = [];
+    // private keywords = ['invoice', 'receipt', 'bill'];
+    // private allowedSenders: string[] = [];
 
     constructor(
         private readonly authService: AuthService,
-
+        private readonly geminiService: GeminiService,
     ) { }
 
     async processFinancialEmails(userId: string): Promise<ScannedEmail[]> {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Constructing Gmail query
-        let q = this.keywords.join(' OR ');
-        if (this.allowedSenders.length > 0) {
-            const senderQuery = this.allowedSenders.map((s) => `from:${s}`).join(' OR ');
-            q += ` AND (${senderQuery})`;
-        }
+        // // Constructing Gmail query
+        // let q = this.keywords.join(' OR ');
+        // if (this.allowedSenders.length > 0) {
+        //     const senderQuery = this.allowedSenders.map((s) => `from:${s}`).join(' OR ');
+        //     q += ` AND (${senderQuery})`;
+        // }
 
-        // Only fetching emails with attachments
-        q += ' has:attachment ';
+        // // Only fetching emails with attachments
+        // q += ' has:attachment ';
 
         // Fetching message IDs only
         let messageIds: string[] = [];
@@ -34,8 +35,8 @@ export class GmailService {
         do {
             const res = await gmail.users.messages.list({
                 userId: 'me',
-                q,
-                maxResults: 50,
+                // q,
+                maxResults: 5,
                 pageToken: nextPageToken,
             });
 
@@ -44,9 +45,19 @@ export class GmailService {
             nextPageToken = res.data.nextPageToken || undefined;
         } while (nextPageToken);
 
-        const results: ScannedEmail[] = [];
+        type EmailMeta = {
+            id: string;
+            subject: string;
+            sender: string;
+            date: string;
+            snippet: string;
+            invoiceNumber: string | null;
+            payload: any; // Gmail API payload (for attachments)
+        };
 
-        // Fetching each message and only keeping if financial attachments exist
+        const emailsMeta: EmailMeta[] = [];
+
+        // Collect all emails first (without Gemini call)
         for (const id of messageIds) {
             const m = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
 
@@ -54,52 +65,90 @@ export class GmailService {
             const subject = headers.find(h => h.name === 'Subject')?.value || '';
             const sender = headers.find(h => h.name === 'From')?.value || '';
             const date = headers.find(h => h.name === 'Date')?.value || '';
+            const snippet = m.data.snippet || '';
 
             const invoiceNumberMatch = subject.match(/\b\d{4,}\b/);
             const invoiceNumber = invoiceNumberMatch ? invoiceNumberMatch[0] : null;
 
+            emailsMeta.push({
+                id,
+                subject,
+                sender,
+                date,
+                snippet,
+                invoiceNumber,
+                payload: m.data.payload,
+            });
+        }
+
+        // Classify all emails in one Gemini call
+        const classifications = await this.geminiService.classifyEmailsBatch(
+            emailsMeta.map(e => ({
+                id: e.id,
+                subject: e.subject,
+                snippet: e.snippet,
+            })),
+        );
+
+        const results: ScannedEmail[] = [];
+
+        for (const email of emailsMeta) {
+            const classification = classifications[email.id] || {
+                category: 'non-financial',
+                confidence: 0,
+            };
+
             const attachments: { filename: string; data: Buffer }[] = [];
 
-            const parts = m.data.payload?.parts || [];
-            for (const part of parts) {
-                if (part.filename && part.body?.attachmentId) {
-                    const isFinancial = /(invoice|reciept|receipt|bill)/i.test(part.filename);
-                    /**  
-                     * I have received a mail for my passport regarding appointment booking and it has an
-                     * attachment [AppointmnetReciept.pdf]...Clearly receipt is a typo and that's
-                     * why it was getting ignored, so I included it too ... 
-                     **/
-
-                    if (!isFinancial) continue;
-
-                    const attach = await gmail.users.messages.attachments.get({
-                        userId: 'me',
-                        messageId: id,
-                        id: part.body.attachmentId,
-                    });
-
-                    if (attach.data.data) {
-                        const data = Buffer.from(attach.data.data, 'base64');
-                        attachments.push({ filename: part.filename, data });
+            if (classification.category === 'financial') {
+                const parts = email.payload?.parts || [];
+                for (const part of parts) {
+                    if (part.filename && part.body?.attachmentId) {
+                        const attach = await gmail.users.messages.attachments.get({
+                            userId: 'me',
+                            messageId: email.id,
+                            id: part.body.attachmentId,
+                        });
+                        if (attach.data.data) {
+                            const data = Buffer.from(attach.data.data, 'base64');
+                            attachments.push({ filename: part.filename, data });
+                        }
                     }
                 }
             }
 
-            // Only pushing emails with financial attachments
-            if (attachments.length > 0) {
-                results.push({ id, sender, subject, date, invoiceNumber, attachments });
-            }
+            results.push({
+                id: email.id,
+                sender: email.sender,
+                subject: email.subject,
+                invoiceNumber: email.invoiceNumber,
+                date: email.date,
+                attachments,
+                classification,   // category + confidence
+                snippet: email.snippet,
+            });
+
+            await this.applyLabel(
+                userId,
+                [email.id],
+                classification.category === 'financial'
+                    ? 'Processed_Financial'
+                    : 'Processed_NonFinancial',
+            );
         }
+
         return results;
     }
 
-    async applyLabel(userId: string, messageIds: string[]) {
+    private async applyLabel(
+        userId: string,
+        messageIds: string[],
+        labelName: string,
+    ) {
         if (!messageIds.length) return;
 
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
-
-        const labelName = 'Processed_Financial';
 
         // Ensure label exists
         const labelsRes = await gmail.users.labels.list({ userId: 'me' });
@@ -117,7 +166,7 @@ export class GmailService {
             label = newLabel.data;
         }
 
-        // Applying label to each message
+        // Apply label to messages
         await gmail.users.messages.batchModify({
             userId: 'me',
             requestBody: {
