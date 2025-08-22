@@ -1,18 +1,20 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { google } from 'googleapis';
 import { AuthService } from '../auth/auth.service';
+import { ScannedEmail } from 'src/utils/types/scanned-email.type';
 
 @Injectable()
 export class GmailService {
     private readonly logger = new Logger(GmailService.name);
-    constructor(
-        private readonly authService: AuthService,
-    ) { }
-
     private keywords = ['invoice', 'receipt', 'bill'];
     private allowedSenders: string[] = [];
 
-    async processFinancialEmails(userId: string) {
+    constructor(
+        private readonly authService: AuthService,
+
+    ) { }
+
+    async processFinancialEmails(userId: string): Promise<ScannedEmail[]> {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
@@ -24,7 +26,7 @@ export class GmailService {
         }
 
         // Only fetching emails with attachments
-        q += ' has:attachment -label:Processed_Financial';
+        q += ' has:attachment ';
 
         // Fetching message IDs only
         let messageIds: string[] = [];
@@ -42,14 +44,7 @@ export class GmailService {
             nextPageToken = res.data.nextPageToken || undefined;
         } while (nextPageToken);
 
-        const results: {
-            id: string;
-            sender: string;
-            subject: string;
-            date: string;
-            invoiceNumber: string | null;
-            attachments: { filename: string; data: Buffer }[];
-        }[] = [];
+        const results: ScannedEmail[] = [];
 
         // Fetching each message and only keeping if financial attachments exist
         for (const id of messageIds) {
@@ -95,7 +90,6 @@ export class GmailService {
                 results.push({ id, sender, subject, date, invoiceNumber, attachments });
             }
         }
-
         return results;
     }
 
