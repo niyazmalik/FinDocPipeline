@@ -6,11 +6,13 @@
 
 ## Features
 
-- Scan Gmail inbox for invoices, receipts, and bills.
-- Download attachments and upload to Google Drive.
-- Log extracted email information (sender, subject, date, invoice number) in Google Sheets.
-- Apply labels to processed emails to avoid duplication.
-- Secure OAuth 2.0 authentication with token refresh support.
+- Scan Gmail inbox for invoices, receipts, and bills.  
+- Download attachments and upload them securely to Google Drive.  
+- Log extracted email information (sender, subject, date, invoice number) in Google Sheets.  
+- Classify emails (financial / non-financial) using **Google Gemini AI** with confidence score.  
+- Batch classification for efficient AI calls.  
+- Apply labels to processed emails to avoid duplication.  
+- Secure OAuth 2.0 authentication with token refresh support.  
 
 ## Getting Started
 
@@ -39,13 +41,34 @@ npm install googleapis dotenv
 Create a `.env` file in the root directory with the following:
 
 ```
-PORT=port_number
-GOOGLE_CLIENT_ID=your_client_id
-GOOGLE_CLIENT_SECRET=your_client_secret
+# --- Server Config ---
+PORT=3000
+NODE_ENV=development
+
+# --- Database Config ---
+DB_HOST=your-db-host
+DB_PORT=5432
+DB_USER=your-db-username
+DB_PASS=your-db-password
+DB_NAME=your-db-name
+
+# --- Google OAuth ---
+GOOGLE_CLIENT_ID=your-google-client-id
+GOOGLE_CLIENT_SECRET=your-google-client-secret
 GOOGLE_REDIRECT_URI=http://localhost:3000/auth/google/callback
-TOKEN_ENCRYPTION_KEY=some_secure_key
-DRIVE_FOLDER_ID=your_drive_folder_id
-SHEET_SPREADSHEET_ID=your_sheet_id
+
+# --- Gemini API ---
+GEMINI_API_KEY=your-gemini-api-key
+
+# --- Security ---
+TOKEN_ENCRYPTION_KEY=your-32-char-secret-key
+
+# --- Google Drive ---
+DRIVE_FOLDER_ID=your-google-drive-folder-id
+
+# --- Google Sheets ---
+SHEET_SPREADSHEET_ID=your-google-sheet-id
+
 ```
 
 ### Running the Application
@@ -57,7 +80,7 @@ npm run start:dev
 
 - Authenticate your Google account via the OAuth flow.
 - Ensure the Drive folder and Google Sheet tab exist.
-- Trigger the scan via the API endpoint `POST /scan`.
+- Trigger the scan via the API endpoint `GET /scan`.
 
 ## Usage
 
@@ -74,12 +97,14 @@ src/
   main.ts
   utils
   entities
+  scan
   modules/
     auth/
     gmail/
     drive/
     sheets/
-    scan/
+    gemini/
+
 ```
 
 
