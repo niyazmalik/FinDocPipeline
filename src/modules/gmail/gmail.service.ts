@@ -1,57 +1,55 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { google } from 'googleapis';
+import { gmail_v1, google } from 'googleapis';
 import { AuthService } from '../auth/auth.service';
-import { ScannedEmail } from 'src/utils/types/scanned-email.type';
+import { EmailMeta } from 'src/utils/types/email-meta.type';
 import { GeminiService } from '../gemini/gemini.service';
 
 @Injectable()
 export class GmailService {
     private readonly logger = new Logger(GmailService.name);
-  
+
     constructor(
         private readonly authService: AuthService,
         private readonly geminiService: GeminiService,
     ) { }
 
-    async processEmails(userId: string): Promise<ScannedEmail[]> {
+    async processEmails(userId: string): Promise<EmailMeta[]> {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Fetching message IDs only
-        let messageIds: string[] = [];
-        let nextPageToken: string | undefined;
-        do {
-            const res = await gmail.users.messages.list({
-                userId: 'me',
-                maxResults: 5,
-                pageToken: nextPageToken,
-            });
+        // Fetching just 5 emails by message IDs...
+        const res = await gmail.users.messages.list({
+            userId: 'me',
+            maxResults: 5,
+        });
 
-            const ids = res.data.messages?.map(m => m.id!).filter(Boolean) || [];
-            messageIds = messageIds.concat(ids);
-            nextPageToken = res.data.nextPageToken || undefined;
-        } while (nextPageToken);
+        const messageIds = res.data.messages?.map(m => m.id!) || [];
 
-        type EmailMeta = {
-            id: string;
-            subject: string;
-            sender: string;
-            date: string;
-            snippet: string;
-            invoiceNumber: string | null;
-            payload: any; // Gmail API payload (for attachments)
-        };
+        // let messageIds: string[] = [];
+        // let nextPageToken: string | undefined;
+        // do {
+        //     const res = await gmail.users.messages.list({
+        //         userId: 'me',
+        //         maxResults: 5,
+        //         pageToken: nextPageToken,
+        //     });
 
-        const emailsMeta: EmailMeta[] = [];
+        //     const ids = res.data.messages?.map(m => m.id!).filter(Boolean) || [];
+        //     messageIds = messageIds.concat(ids);
+        //     nextPageToken = res.data.nextPageToken || undefined;
+        // } while (nextPageToken);
 
-        // Collecting email metadata before Gemini batch classification...
+
+        // collecting lightweight metadata...no attachments yet...
+        const emailsMeta: (Omit<EmailMeta, "attachments" | "classification"> & { payload?: gmail_v1.Schema$MessagePart })[] = [];
+
         for (const id of messageIds) {
             const m = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
-
             const headers = m.data.payload?.headers || [];
-            const subject = headers.find(h => h.name === 'Subject')?.value || '';
-            const sender = headers.find(h => h.name === 'From')?.value || '';
-            const date = headers.find(h => h.name === 'Date')?.value || '';
+
+            const subject = this.getHeader(headers, 'Subject');
+            const sender = this.getHeader(headers, 'From');
+            const date = this.getHeader(headers, 'Date');
             const snippet = m.data.snippet || '';
 
             const invoiceNumberMatch = subject.match(/\b\d{4,}\b/);
@@ -64,57 +62,65 @@ export class GmailService {
                 date,
                 snippet,
                 invoiceNumber,
-                payload: m.data.payload,
+                payload: m.data.payload ?? undefined,
             });
         }
 
-        // Classifying all collected emails in one Gemini call...
+        // classifying in batch using Gemini
         const classifications = await this.geminiService.classifyEmailsBatch(
             emailsMeta.map(e => ({
                 id: e.id,
                 subject: e.subject,
                 snippet: e.snippet,
-            })),
+            }))
         );
 
-        const results: ScannedEmail[] = [];
+        // Step 3: fetch attachments only for financial emails
+        const results: EmailMeta[] = [];
 
         for (const email of emailsMeta) {
-            const classification = classifications[email.id] || {
-                category: 'non-financial',
-                confidence: 0,
-            };
-
-            const attachments: { filename: string; data: Buffer }[] = [];
+            const classification = classifications[email.id] || { category: 'non-financial', confidence: 0 };
+            let attachments: { filename: string; data: Buffer }[] | undefined;
 
             if (classification.category === 'financial') {
-                const parts = email.payload?.parts || [];
-                for (const part of parts) {
-                    if (part.filename && part.body?.attachmentId) {
-                        const attach = await gmail.users.messages.attachments.get({
-                            userId: 'me',
-                            messageId: email.id,
-                            id: part.body.attachmentId,
-                        });
-                        if (attach.data.data) {
-                            const data = Buffer.from(attach.data.data, 'base64');
-                            attachments.push({ filename: part.filename, data });
+                attachments = [];
+
+                const collectParts = async (parts?: gmail_v1.Schema$MessagePart[]) => {
+                    if (!parts) return;
+                    for (const part of parts) {
+                        if (part.filename && part.body?.attachmentId) {
+                            const attach = await gmail.users.messages.attachments.get({
+                                userId: 'me',
+                                messageId: email.id,
+                                id: part.body.attachmentId,
+                            });
+                            if (attach.data.data) {
+                                attachments!.push({
+                                    filename: part.filename,
+                                    data: Buffer.from(attach.data.data, 'base64'),
+                                });
+                            }
                         }
+                        // recursively checking if nested parts exist
+                        if (part.parts) await collectParts(part.parts);
                     }
-                }
+                };
+
+                await collectParts(email.payload?.parts);
             }
 
             results.push({
                 id: email.id,
                 sender: email.sender,
                 subject: email.subject,
-                invoiceNumber: email.invoiceNumber,
                 date: email.date,
+                invoiceNumber: email.invoiceNumber,
                 attachments,
                 classification,
                 snippet: email.snippet,
             });
 
+            // Will handle this also to gemini once classification works flawlessly...
             await this.applyLabel(
                 userId,
                 [email.id],
@@ -161,5 +167,9 @@ export class GmailService {
         });
 
         this.logger.log(`Applied label "${labelName}" to ${messageIds.length} emails.`);
+    }
+
+    private getHeader(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, name: string): string {
+        return headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
     }
 }

@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DriveService } from 'src/modules/drive/drive.service';
 import { GmailService } from 'src/modules/gmail/gmail.service';
 import { SheetService } from 'src/modules/sheet/sheet.service';
-import { ScannedEmail } from 'src/utils/types/scanned-email.type';
+import { EmailMeta } from 'src/utils/types/email-meta.type';
 import { GoogleDriveFile } from 'src/entities/google-drive-file.entity';
 import { GoogleSheetsRecord } from 'src/entities/google-sheets-record.entity';
 import { ProcessedEmail } from 'src/entities/processed-email.entity';
@@ -28,7 +28,7 @@ export class ScanService {
 
     async processInbox(userId: string) {
         // getting the emails
-        const emails: ScannedEmail[] =
+        const emails: EmailMeta[] =
             await this.gmailService.processEmails(userId);
 
         if (!emails.length) {
@@ -61,7 +61,7 @@ export class ScanService {
                 savedEmails.push(savedEmail);
 
                 // Preparing and uploading the attachments in drive
-                const filesToUpload = email.attachments.map((att) => ({
+                const filesToUpload = email.attachments?.map((att) => ({
                     filename: att.filename,
                     data: att.data,
                     sender: email.sender,
@@ -69,52 +69,54 @@ export class ScanService {
                     date: email.date,
                 }));
 
-                const uploadedFileIds = await this.driveService.uploadFiles(
-                    userId,
-                    filesToUpload,
-                );
+                if (filesToUpload) {
+                    const uploadedFileIds = await this.driveService.uploadFiles(
+                        userId,
+                        filesToUpload,
+                    );
 
-                // Saving the drive uploads data in database
-                const driveFiles = filesToUpload.map((file, idx) =>
-                    manager.getRepository(GoogleDriveFile).create({
-                        email: savedEmail,
-                        file_id: uploadedFileIds[idx],
-                        file_name: file.filename,
-                        file_url: `https://drive.google.com/file/d/${uploadedFileIds[idx]}/view`,
-                        folder_id: process.env.DRIVE_FOLDER_ID,
-                    }),
-                );
-                await manager.getRepository(GoogleDriveFile).save(driveFiles);
+                    // Saving the drive uploads data in database
+                    const driveFiles = filesToUpload.map((file, idx) =>
+                        manager.getRepository(GoogleDriveFile).create({
+                            email: savedEmail,
+                            file_id: uploadedFileIds[idx],
+                            file_name: file.filename,
+                            file_url: `https://drive.google.com/file/d/${uploadedFileIds[idx]}/view`,
+                            folder_id: process.env.DRIVE_FOLDER_ID,
+                        }),
+                    );
+                    await manager.getRepository(GoogleDriveFile).save(driveFiles);
 
-                // Logging into Sheets
-                const sheetLogs = filesToUpload.map((file, idx) => ({
-                    sender: file.sender,
-                    subject: email.subject,
-                    date: file.date,
-                    invoiceNumber: file.invoiceNumber,
-                    driveFileId: uploadedFileIds[idx],
-                }));
-                await this.sheetService.logFiles(userId, sheetLogs);
+                    // Logging into Sheets
+                    const sheetLogs = filesToUpload.map((file, idx) => ({
+                        sender: file.sender,
+                        subject: email.subject,
+                        date: file.date,
+                        invoiceNumber: file.invoiceNumber,
+                        driveFileId: uploadedFileIds[idx],
+                    }));
+                    await this.sheetService.logFiles(userId, sheetLogs);
 
-                const generatedSheetRowIds = await this.sheetService.logFiles(userId, sheetLogs);
+                    const generatedSheetRowIds = await this.sheetService.logFiles(userId, sheetLogs);
 
-                // Saving the sheet logs data in database
-                const sheetRecords = driveFiles.map((file, idx) =>
-                    manager.getRepository(GoogleSheetsRecord).create({
-                        email: savedEmail,
-                        file,
-                        sheet_row_id: generatedSheetRowIds[idx],
-                    }),
-                );
-                await manager.getRepository(GoogleSheetsRecord).save(sheetRecords);
+                    // Saving the sheet logs data in database
+                    const sheetRecords = driveFiles.map((file, idx) =>
+                        manager.getRepository(GoogleSheetsRecord).create({
+                            email: savedEmail,
+                            file,
+                            sheet_row_id: generatedSheetRowIds[idx],
+                        }),
+                    );
+                    await manager.getRepository(GoogleSheetsRecord).save(sheetRecords);
+                }
 
                 /* Linking back to the original email and recording whether
                     it is financial along with Gemini confidence score in the database*/
                 const processed = manager.getRepository(ProcessedEmail).create({
                     email: savedEmail,
-                    is_financial: true,
-                    processed_date: new Date(),
+                    is_financial: email.classification.category === 'financial',
                     gemini_confidence_score: email.classification.confidence,
+                    processed_date: new Date(),
                 });
                 await manager.getRepository(ProcessedEmail).save(processed);
             }

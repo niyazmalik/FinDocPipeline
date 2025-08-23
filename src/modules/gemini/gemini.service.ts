@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { GoogleGenerativeAI } from '@google/generative-ai';
-import { EmailClassification } from 'src/utils/types/scanned-email.type';
+import { EmailClassification } from 'src/utils/types/email-meta.type';
 
 @Injectable()
 export class GeminiService {
