@@ -1,4 +1,4 @@
-import { gmail_v1, google } from 'googleapis';
+import { gmail_v1 } from 'googleapis';
 
 const PROCESSED_LABELS = [
   'Financial',
@@ -11,9 +11,14 @@ const PROCESSED_LABELS = [
 /**
  * Building Gmail search query to exclude spam, trash, and processed labels.
  */
-function buildExclusionQuery(): string {
+function buildExclusionQuery(existingLabels: string[]): string {
   const base = '-in:spam -in:trash newer_than:30d';
-  const excludeLabels = PROCESSED_LABELS.map(l => `-label:${l}`).join(' ');
+
+  const validExclusions = PROCESSED_LABELS.filter(label =>
+    existingLabels.includes(label),
+  );
+
+  const excludeLabels = validExclusions.map(l => `-label:${l}`).join(' ');
   return `${base} ${excludeLabels}`;
 }
 
@@ -27,12 +32,16 @@ export async function fetchUnprocessedEmails(
   let messageIds: string[] = [];
   let nextPageToken: string | undefined;
 
+  // Fetching existing labels...
+  const labelsResponse = await gmail.users.labels.list({ userId: 'me' });
+  const existingLabels = labelsResponse.data.labels?.map(l => l.name!) || [];
+
   do {
     const res = await gmail.users.messages.list({
       userId: 'me',
       labelIds: ['INBOX'],
       maxResults: maxResultsPerPage,
-      q: buildExclusionQuery(),
+      q: buildExclusionQuery(existingLabels),
       pageToken: nextPageToken,
     });
 
