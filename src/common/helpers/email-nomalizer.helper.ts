@@ -7,7 +7,7 @@ export class EmailNormalizer {
   static normalizeSubject(
     subject: string | undefined,
     threadId: string,
-    replyIndex: number // 0 = original (first other-party message), 1 = 1st reply, ...
+    mailIndex: number // 0 = first mail, 1 = second mail, etc.
   ): string {
     const stripped = subject && subject.trim() ? this.stripPrefixes(subject) : '';
 
@@ -15,16 +15,13 @@ export class EmailNormalizer {
       return stripped;
     }
 
-    // If no usable subject → synthetic subject based on index
-    if (replyIndex === 0) {
-      return `${threadId}_original`;
-    }
-    return `${threadId}_${this.ordinal(replyIndex)}_reply`;
+    // Always generate with 1-based numbering (so 0 => 1st, 1 => 2nd, etc.)
+    const displayIndex = mailIndex + 1;
+    return `${threadId}_${this.ordinal(displayIndex)}_mail`;
   }
 
   /** Removing all "Re:" / "Fwd:" prefixes (multiple) */
   private static stripPrefixes(subject: string): string {
-    // Removing repeated Re:/Fwd: at the start safely
     return subject.replace(/^(?:(?:re|fwd):\s*)+/gi, '').trim();
   }
 

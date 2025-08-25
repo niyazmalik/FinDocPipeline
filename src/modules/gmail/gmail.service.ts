@@ -67,7 +67,7 @@ export class GmailService {
     }
 
     /** Getting this message's replyIndex among OTHER-PARTY messages in the thread. */
-    private async getReplyIndexForMessage(
+    private async getMailIndexForMessage(
         gmail: gmail_v1.Gmail,
         threadId: string,
         messageId: string,
@@ -81,6 +81,10 @@ export class GmailService {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
+        // Getting user’s own email (so we can exclude own messages)
+        const userInfo = await gmail.users.getProfile({ userId: 'me' });
+        const userEmail = userInfo.data.emailAddress || '';
+
         // Fetching all unprocessed email IDs
         const messageIds = await fetchUnprocessedEmails(gmail);
 
@@ -92,24 +96,21 @@ export class GmailService {
             const m = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
             const headers = m.data.payload?.headers || [];
 
-            const subject = this.getHeader(headers, 'Subject');
             const sender = this.getHeader(headers, 'From');
-            const date = this.getHeader(headers, 'Date');
-            const snippet = m.data.snippet || '';
-            const threadId = m.data.threadId || 'unknown-thread';
-
-            // Getting user’s own email (so we can exclude own messages)
-            const userInfo = await gmail.users.getProfile({ userId: 'me' });
-            const userEmail = userInfo.data.emailAddress || '';
             const normalizedSender = EmailNormalizer.normalizeSender(sender);
 
             if (normalizedSender === userEmail) { // if me, then skipping...
                 continue;
             }
 
-            const replyIndex = await this.getReplyIndexForMessage(gmail, threadId, id, userEmail);
+            const subject = this.getHeader(headers, 'Subject');
+            const date = this.getHeader(headers, 'Date');
+            const snippet = m.data.snippet || '';
+            const threadId = m.data.threadId || 'unknown-thread';
 
-            const normalizedSubject = EmailNormalizer.normalizeSubject(subject, threadId, replyIndex);
+            const mailIndex = await this.getMailIndexForMessage(gmail, threadId, id, userEmail);
+
+            const normalizedSubject = EmailNormalizer.normalizeSubject(subject, threadId, mailIndex);
 
             emailsMeta.push({
                 id,
