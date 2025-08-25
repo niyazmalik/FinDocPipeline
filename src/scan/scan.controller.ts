@@ -8,10 +8,10 @@ export class ScanController {
     @Get()
     async scan(@Query('userId') userId: string) {
         try {
-            const gmailData = await this.scanService.processInbox(userId);
+            const Mail_IDs = await this.scanService.processInbox(userId);
             return {
-                message: 'Emails fetched, processed, got uploaded and recorded in database...',
-                gmailData,
+                message: 'Processed mails...',
+                Mail_IDs,
             };
         } catch (err) {
             console.error('Error in scan:', err);

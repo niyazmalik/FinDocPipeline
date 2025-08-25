@@ -87,6 +87,7 @@ export class GmailService {
 
         // Fetching all unprocessed email IDs
         const messageIds = await fetchUnprocessedEmails(gmail);
+        this.logger.debug(`Total mails fetched: ${messageIds.length}`);
 
         // collecting lightweight metadata...no attachments yet...
         const emailsMeta: (Omit<EmailMeta, "attachments" | "classification" | "invoiceNumber"> &
