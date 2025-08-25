@@ -1,8 +1,11 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { gmail_v1, google } from 'googleapis';
 import { AuthService } from '../auth/auth.service';
-import { EmailMeta } from 'src/utils/types/email-meta.type';
+import { EmailMeta } from 'src/common/types/email-meta.type';
 import { GeminiService } from '../gemini/gemini.service';
+import { resolveLabelFromClassification } from 'src/common/helpers/classification-label.helper';
+import { fetchUnprocessedEmails } from 'src/common/helpers/email-fetcher.helper';
+import { EmailNormalizer } from 'src/common/helpers/email-nomalizer.helper';
 
 @Injectable()
 export class GmailService {
@@ -13,55 +16,108 @@ export class GmailService {
         private readonly geminiService: GeminiService,
     ) { }
 
+    // Caching for thread positions per request
+    private threadIndexCache = new Map<
+        string, // threadId
+        { indexByMessageId: Record<string, number> }
+    >();
+
+    /**
+     * Building (and caching) per-thread index for messages from the OTHER party (exclude the own messages).
+     */
+    private async buildThreadIndex(
+        gmail: gmail_v1.Gmail,
+        threadId: string,
+        userEmail: string
+    ) {
+        const cached = this.threadIndexCache.get(threadId);
+        if (cached) return cached;
+
+        const t = await gmail.users.threads.get({
+            userId: 'me',
+            id: threadId,
+            format: 'full',
+        });
+
+        const messages = t.data.messages ?? [];
+
+        // Only keeping other-party messages
+        const items = messages
+            .map(m => {
+                const headers = m.payload?.headers || [];
+                const from = headers.find(h => h.name?.toLowerCase() === 'from')?.value || '';
+                const fromEmail = EmailNormalizer.normalizeSender(from);
+                const internalDate = m.internalDate ? Number(m.internalDate) : 0;
+                return { id: m.id!, fromEmail, internalDate };
+            })
+            .filter(x => x.fromEmail !== userEmail);
+
+        // Sorting by time
+        items.sort((a, b) => a.internalDate - b.internalDate);
+
+        // Assigning the index
+        const indexByMessageId: Record<string, number> = {};
+        items.forEach((it, idx) => {
+            indexByMessageId[it.id] = idx; // 0 = original, 1 = 1st reply, etc.
+        });
+
+        const built = { indexByMessageId };
+        this.threadIndexCache.set(threadId, built);
+        return built;
+    }
+
+    /** Getting this message's replyIndex among OTHER-PARTY messages in the thread. */
+    private async getMailIndexForMessage(
+        gmail: gmail_v1.Gmail,
+        threadId: string,
+        messageId: string,
+        userEmail: string
+    ): Promise<number> {
+        const ti = await this.buildThreadIndex(gmail, threadId, userEmail);
+        return ti.indexByMessageId[messageId] ?? 0; // default to 0 if not found
+    }
+
     async processEmails(userId: string): Promise<EmailMeta[]> {
         const oauth2Client = await this.authService.getAuthenticatedUser(userId);
         const gmail = google.gmail({ version: 'v1', auth: oauth2Client });
 
-        // Fetching just 5 emails by message IDs...
-        const res = await gmail.users.messages.list({
-            userId: 'me',
-            maxResults: 5,
-        });
+        // Getting user’s own email (so we can exclude own messages)
+        const userInfo = await gmail.users.getProfile({ userId: 'me' });
+        const userEmail = userInfo.data.emailAddress || '';
 
-        const messageIds = res.data.messages?.map(m => m.id!) || [];
-
-        // let messageIds: string[] = [];
-        // let nextPageToken: string | undefined;
-        // do {
-        //     const res = await gmail.users.messages.list({
-        //         userId: 'me',
-        //         maxResults: 5,
-        //         pageToken: nextPageToken,
-        //     });
-
-        //     const ids = res.data.messages?.map(m => m.id!).filter(Boolean) || [];
-        //     messageIds = messageIds.concat(ids);
-        //     nextPageToken = res.data.nextPageToken || undefined;
-        // } while (nextPageToken);
-
+        // Fetching all unprocessed email IDs
+        const messageIds = await fetchUnprocessedEmails(gmail);
 
         // collecting lightweight metadata...no attachments yet...
-        const emailsMeta: (Omit<EmailMeta, "attachments" | "classification"> & { payload?: gmail_v1.Schema$MessagePart })[] = [];
+        const emailsMeta: (Omit<EmailMeta, "attachments" | "classification" | "invoiceNumber"> &
+        { payload?: gmail_v1.Schema$MessagePart })[] = [];
 
         for (const id of messageIds) {
             const m = await gmail.users.messages.get({ userId: 'me', id, format: 'full' });
             const headers = m.data.payload?.headers || [];
 
-            const subject = this.getHeader(headers, 'Subject');
             const sender = this.getHeader(headers, 'From');
+            const normalizedSender = EmailNormalizer.normalizeSender(sender);
+
+            if (normalizedSender === userEmail) { // if me, then skipping...
+                continue;
+            }
+
+            const subject = this.getHeader(headers, 'Subject');
             const date = this.getHeader(headers, 'Date');
             const snippet = m.data.snippet || '';
+            const threadId = m.data.threadId || 'unknown-thread';
 
-            const invoiceNumberMatch = subject.match(/\b\d{4,}\b/);
-            const invoiceNumber = invoiceNumberMatch ? invoiceNumberMatch[0] : null;
+            const mailIndex = await this.getMailIndexForMessage(gmail, threadId, id, userEmail);
+
+            const normalizedSubject = EmailNormalizer.normalizeSubject(subject, threadId, mailIndex);
 
             emailsMeta.push({
                 id,
-                subject,
-                sender,
+                subject: normalizedSubject,
+                sender: normalizedSender,
                 date,
                 snippet,
-                invoiceNumber,
                 payload: m.data.payload ?? undefined,
             });
         }
@@ -75,14 +131,19 @@ export class GmailService {
             }))
         );
 
-        // Step 3: fetch attachments only for financial emails
+        // fetching attachments only for financial emails
         const results: EmailMeta[] = [];
 
         for (const email of emailsMeta) {
             const classification = classifications[email.id] || { category: 'non-financial', confidence: 0 };
             let attachments: { filename: string; data: Buffer }[] | undefined;
+            let invoiceNumber: string | null = null;
 
-            if (classification.category === 'financial') {
+            if (classification.category.type === 'financial') {
+
+                const invoiceNumberMatch = email.subject.match(/(?:INV|Invoice|Bill|Receipt|#)?[-_ ]?\d{4,}/i);
+                invoiceNumber = invoiceNumberMatch ? invoiceNumberMatch[0] : null;
+
                 attachments = [];
 
                 const collectParts = async (parts?: gmail_v1.Schema$MessagePart[]) => {
@@ -114,7 +175,7 @@ export class GmailService {
                 sender: email.sender,
                 subject: email.subject,
                 date: email.date,
-                invoiceNumber: email.invoiceNumber,
+                invoiceNumber,
                 attachments,
                 classification,
                 snippet: email.snippet,
@@ -124,9 +185,7 @@ export class GmailService {
             await this.applyLabel(
                 userId,
                 [email.id],
-                classification.category === 'financial'
-                    ? 'Processed_Financial'
-                    : 'Processed_NonFinancial',
+                resolveLabelFromClassification(classification),
             );
         }
 
@@ -171,5 +230,11 @@ export class GmailService {
 
     private getHeader(headers: gmail_v1.Schema$MessagePartHeader[] | undefined, name: string): string {
         return headers?.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || '';
+    }
+
+    private async countRepliesInThread(gmail: any, threadId: string): Promise<number> {
+        const res = await gmail.users.threads.get({ userId: 'me', id: threadId });
+        return res.data.messages?.length ? res.data.messages.length - 1 : 0;
+        // -1 because the first message is not a "reply"
     }
 }

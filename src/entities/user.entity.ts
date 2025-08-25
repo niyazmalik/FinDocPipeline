@@ -1,5 +1,5 @@
 import { Entity, Column, PrimaryGeneratedColumn, BeforeInsert, BeforeUpdate } from 'typeorm';
-import { encrypt, decrypt } from '../utils/crypto';
+import { encrypt, decrypt } from '../common/helpers/token-encryption.helper';
 
 @Entity('users')
 export class User {
