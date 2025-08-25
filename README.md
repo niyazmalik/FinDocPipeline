@@ -1,8 +1,9 @@
-# Financial Document Organizer
+# FinDocPipeline
 
 ## Overview
 
-**Financial Document Organizer** is a NestJS-based automation tool designed to streamline financial record-keeping. It scans your Gmail for invoices and receipts, archives them in Google Drive with a structured naming system, and logs all relevant details in Google Sheets for easy tracking and reporting.
+**FinDocPipeline** is a backend service built with NestJS, PostgreSQL, and Google APIs to automate financial email and document processing.
+It fetches emails from Gmail, classifies them using Gemini AI, organizes attachments in Google Drive, logs records in Google Sheets, and stores structured data in a relational database.
 
 ## Features
 
@@ -80,14 +81,7 @@ npm run start:dev
 
 - Authenticate your Google account via the OAuth flow.
 - Ensure the Drive folder and Google Sheet tab exist.
-- Trigger the scan via the API endpoint `GET /scan`.
-
-## Usage
-
-- The service will scan your Gmail for relevant emails.
-- Attachments are uploaded to Drive following a structured naming convention.
-- Email details are logged in Google Sheets.
-- Processed emails are labeled to prevent re-processing.
+- Trigger the scan via the API endpoint `GET /scan?userId=user_id`.
 
 ## Folder Structure
 
@@ -95,7 +89,7 @@ npm run start:dev
 src/
   app.module.ts
   main.ts
-  utils
+  common
   entities
   scan
   modules/
