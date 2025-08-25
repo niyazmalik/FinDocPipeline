@@ -12,7 +12,7 @@ const PROCESSED_LABELS = [
  * Building Gmail search query to exclude spam, trash, and processed labels.
  */
 function buildExclusionQuery(): string {
-  const base = '-in:spam -in:trash';
+  const base = '-in:spam -in:trash newer_than:30d';
   const excludeLabels = PROCESSED_LABELS.map(l => `-label:${l}`).join(' ');
   return `${base} ${excludeLabels}`;
 }
@@ -22,7 +22,7 @@ function buildExclusionQuery(): string {
  */
 export async function fetchUnprocessedEmails(
   gmail: gmail_v1.Gmail,
-  maxResultsPerPage = 100,
+  maxResultsPerPage = 10,
 ): Promise<string[]> {
   let messageIds: string[] = [];
   let nextPageToken: string | undefined;
